@@ -7,7 +7,7 @@ use PDF::API2;
 
 use 5.008002;
 
-our $VERSION = '1.0.1.0';
+our $VERSION = '1.0.2.0';
 
 use constant PI => 4 * atan2(1, 1);
 
@@ -28,6 +28,10 @@ sub new{
         $self->_setCurPage(1);
         
     }
+
+    $self->setMWCache({});
+    $self->setSWCache({});
+    $self->setFPCache({});
     $self->_setPDF($PDF);
     $self->setFilePath($filePath); # for retrieval when we'll want its content
                
@@ -55,6 +59,36 @@ sub setFilePath{
 sub getFilePath{
     my $self = shift;
     return $self->{_file_path};
+}
+
+sub _setMWCache{
+    my ($self,$value) = @_;
+    $self->{_mw_cache} = $value;
+}
+
+sub _getMWCache{
+    my $self = shift;
+    return $self->{_mw_cache};
+}
+
+sub _setSWCache{
+    my ($self,$value) = @_;
+    $self->{_sw_cache} = $value;
+}
+
+sub _getSWCache{
+    my $self = shift;
+    return $self->{_sw_cache};
+}
+
+sub _setFPCache{
+    my ($self,$value) = @_;
+    $self->{_fp_cache} = $value;
+}
+
+sub _getFPCache{
+    my $self = shift;
+    return $self->{_fp_cache};
 }
 
 sub addNewPage{
@@ -709,6 +743,87 @@ sub drawText{
  
 }
 
+sub drawTextOrWidth
+{
+    my ($self,$drawing,$text,$font,$size,@more) = @_;
+    if ($drawing) {
+        return $self->drawText($text,$font,$size,@more);
+    } else {
+        return $self->getWidth($text,$font,$size);
+    }
+}
+
+sub drawTextOnlyIfFit{
+    my ($self,$text,$font,$fontSize,$x,$y,$color,$align,$pageNo);
+    $pageNo = $self->_getCurPage unless $pageNo; 
+    my $page    = $self->_getPage($pageNo);
+    
+    my $width = $self->getWidth($text,$font,$size);
+    my ($llx,$lly,$urx,$ury) = $page->get_mediabox;
+    
+    return $self->drawText($font,$fontSize,$x,$y,$color,$align,$pageNo)
+        if $urx >= ($width + $x);
+    return 0; # could'n draw it because it's would get out of the page.
+    
+}
+
+sub getFontWidth
+{
+    my ($self,$text,$font,$size) = @_;
+    $size ||= 1;
+    my $fontObj = $self->_getFont($font);
+    return map { $_ * $size } $fontObj->width_array($text)
+        if wantarray;
+    return $fontObj->width($text) * $size;
+}
+
+sub getFontMaxWidth
+{
+    my ($self,$font,$size) = @_;
+    $size ||= 1;
+    my $mwCache = $self->_getMWCache;
+    return $mwcache->{$font}*$size if $mwcache->{$font};
+    
+    my $fontObj = $self->_getFont($font);
+    $mwcache->{$font} = $fontObj->maxwidth();
+    $self->_setMWCache($mwCache);
+    
+    return ($mwcache->{$font})*$size;
+}
+
+
+sub getFontSpaceWidth
+{
+    my ($self,$font,$size) = @_;
+    $size ||= 1;
+    my $swCache = $self->_getSWCache;
+    return $swcache->{$font}*$size if $swcache->{$font};
+    
+    my $fontObj = $self->_getFont($font);
+    $swcache->{$font} = $fontObj->width(' ');
+    $self->_setSWCache($swCache);
+    
+    return ($swcache->{$font})*$size;
+}
+
+sub getFontPosition
+{
+    my ($self,$font,$size) = @_;
+    $size ||= 1;
+    my $fpCache = $self->_getFPCache;
+    return $fpcache{$font}*$size if $fpcache{$font};
+    
+    my $fontObj = $self->_getFont($font);
+    my $a = $fontObj->ascender;
+    my $d = $fontObj->descender;
+    my $totalheight = $a - $d;
+    my $pos = $a/$totalheight;
+    $fpcache->{$font} = $pos;
+    $self->_setFPCache($fpCache);
+    
+    return $pos*$size;
+}
+
 sub importPage{
     my ($self,$sourcepdfPath,$sourceindex,$pageNo) = @_;
     
@@ -813,6 +928,40 @@ If align is undef or 0, the text will be left aligned at (x,y)
 If align is set to 1, the text will be centered at (x,y)
 If align is set to 2, the text will be right aligned at (x,y)
 calling 'drawText' in scalar context will return the width of the printed Text.
+
+=head3 drawTextOrWidth($drawing,$text,$font,$size,@more)
+
+If drawing is set to 1, return the width of 'text' given the 'font' and the 'size'.
+If drawing is set to 0, draw the text 'string' at (x,y) using the font 'font' of size fontSize and color 'color'.
+If align is undef or 0, the text will be left aligned at (x,y)
+If align is set to 1, the text will be centered at (x,y)
+If align is set to 2, the text will be right aligned at (x,y)
+
+=head3 drawTextOnlyIfFit($text,$font,$fontSize,$x,$y,$color,$align,$pageNo)
+
+Draw the text 'string' at (x,y) using the font 'font' of size fontSize and color 'color' only if the text will fit in the page. Otherwise, it will draw nothing. 
+If align is undef or 0, the text will be left aligned at (x,y)
+If align is set to 1, the text will be centered at (x,y)
+If align is set to 2, the text will be right aligned at (x,y)
+calling 'drawTextOnlyIfFit' in scalar context will return the width of the printed Text or 0 if it can't display it.
+
+=head2 Fonts Properties
+
+=head3 getFontWidth($text,$font,$size)
+
+Return the width of the 'text' given the 'font' and 'size' 
+
+=head3 getFontMaxWidth($font,$size)
+
+Return the maximum width for the given 'font' and 'size'. The maximum width is the width of the largest possible caracter of the font set. 
+
+=head3 getFontSpaceWidth($font,$size)
+
+Return the width of the whitespace caracter for the given 'font' and 'size'
+
+=head3 getFontPosition($font,$size)
+
+Return the relative y position for the given 'font' and 'size'
 
 =head2 Lines and Curves
 
